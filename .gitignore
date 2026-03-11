@@ -4,9 +4,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Environment file (contains credentials - keep private!)
-# .env   <-- intentionally NOT ignored so it stays tracked locally
-# but remove this comment if you ever push to a remote repo
+# Environment file (contains credentials - NEVER commit this!)
+.env
+
 
 # Logs
 *.log
