@@ -5,7 +5,7 @@ echo "============================================"
 echo "  Active Communities Monitor - Deployment"
 echo "============================================"
 
-APP_DIR="/var/www/activecommunities"
+APP_DIR="/var/www/html/activecommunities.owera.ca"
 SERVICE_NAME="activecommunities"
 
 # Navigate to project directory
@@ -17,23 +17,21 @@ git reset --hard HEAD
 git clean -fd
 git pull origin main
 
-# Activate virtual environment (create if missing)
-if [ ! -d "venv" ]; then
-    echo "🐍 Creating virtual environment..."
-    python3 -m venv venv
+# Install uv if not present
+if ! command -v uv &>/dev/null; then
+    echo "⬇  Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 
-source venv/bin/activate
-
-# Install / update Python dependencies
-echo "📦 Installing Python dependencies..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
+# Sync dependencies into .venv (creates venv automatically)
+echo "📦 Syncing Python dependencies with uv..."
+uv sync
 
 # Install Playwright browser binaries
 echo "🎭 Installing Playwright Chromium..."
-playwright install chromium
-playwright install-deps chromium
+uv run playwright install chromium
+uv run playwright install-deps chromium
 
 # Ensure .env exists (do NOT overwrite if already present)
 if [ ! -f ".env" ]; then
@@ -51,7 +49,7 @@ elif [ -f "/etc/supervisor/conf.d/${SERVICE_NAME}.conf" ]; then
     echo "✅ Supervisor process restarted."
 else
     echo "ℹ  No systemd/supervisor service found. Start manually:"
-    echo "   source venv/bin/activate && python register.py --headless"
+    echo "   uv run python register.py --headless"
 fi
 
 echo ""
