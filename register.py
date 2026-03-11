@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import logging
+import requests
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -23,6 +24,10 @@ AC_CENTER_ID = os.getenv("AC_CENTER_ID", "131")
 AC_MIN_SPOTS = int(os.getenv("AC_MIN_SPOTS", "1"))
 AC_CHECK_INTERVAL = int(os.getenv("AC_CHECK_INTERVAL", "300"))
 AC_MAX_RETRIES = int(os.getenv("AC_MAX_RETRIES", "3"))
+
+# Telegram
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Search URL — open_spots filter tells the portal to only return activities with available spots
 # This avoids brittle text-parsing of card content and mirrors what the "Open spots" button does
@@ -45,6 +50,53 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Telegram helpers
+# ---------------------------------------------------------------------------
+
+def notify_telegram(message: str) -> None:
+    """Send a message to the configured Telegram chat. Fails silently."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=10)
+        if resp.ok:
+            logger.info("📨 Telegram notification sent.")
+        else:
+            logger.warning(f"Telegram API error: {resp.status_code} {resp.text}")
+    except Exception as e:
+        logger.warning(f"Failed to send Telegram notification: {e}")
+
+
+def get_telegram_chat_id() -> None:
+    """Fetch and print the chat ID of whoever last messaged the bot (via getUpdates)."""
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ TELEGRAM_BOT_TOKEN is not set in .env")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    resp = requests.get(url, timeout=10)
+    data = resp.json()
+    updates = data.get("result", [])
+    if not updates:
+        print(
+            "No messages received yet.\n"
+            "👉 Open Telegram, search for your bot, send it any message (e.g. /start), "
+            "then run this command again."
+        )
+        return
+    # Use the most recent update
+    last = updates[-1]
+    chat = last.get("message", {}).get("chat", {})
+    chat_id = chat.get("id")
+    first_name = chat.get("first_name", "")
+    print(f"\n✅ Your Telegram chat ID is: {chat_id}  (name: {first_name})")
+    print(f"Add this to your .env file:\n  TELEGRAM_CHAT_ID={chat_id}")
+
+
+# ---------------------------------------------------------------------------
 
 
 def login(page):
@@ -264,7 +316,9 @@ def run_monitor(headless: bool = False):
                 retries += 1
                 logger.error(f"Login attempt {retries} failed: {e}")
                 if retries >= AC_MAX_RETRIES:
-                    logger.error("Max login retries reached. Exiting.")
+                    msg = f"❌ Login failed after {AC_MAX_RETRIES} attempts. Monitor stopped."
+                    logger.error(msg)
+                    notify_telegram(msg)
                     browser.close()
                     return
                 time.sleep(10)
@@ -277,11 +331,24 @@ def run_monitor(headless: bool = False):
             try:
                 registered = check_and_register(page)
                 if registered:
-                    logger.info("🎉 Successfully registered! Exiting monitor.")
+                    msg = (
+                        f"🎉 Successfully registered for {AC_ACTIVITY_NAME}!\n"
+                        f"Check your Active Communities account to confirm."
+                    )
+                    logger.info(msg)
+                    notify_telegram(msg)
                     break
+                else:
+                    notify_telegram(
+                        f"⏳ Check #{check_count}: No open spots for {AC_ACTIVITY_NAME}.\n"
+                        f"Next check in {AC_CHECK_INTERVAL // 60} min "
+                        f"({AC_CHECK_INTERVAL} s)."
+                    )
             except Exception as e:
-                logger.error(f"Error during check: {e}")
-                # Try to recover by going back to the base URL
+                err_msg = f"❌ Check #{check_count} error: {e}"
+                logger.error(err_msg)
+                notify_telegram(err_msg)
+                # Try to recover
                 try:
                     page.goto(AC_BASE_URL, wait_until="networkidle")
                 except Exception:
@@ -309,9 +376,17 @@ if __name__ == "__main__":
         default=False,
         help="Run a single check and exit (useful for testing).",
     )
+    parser.add_argument(
+        "--get-chat-id",
+        action="store_true",
+        default=False,
+        help="Fetch and print your Telegram chat ID (message the bot first, then run this).",
+    )
     args = parser.parse_args()
 
-    if args.check_once:
+    if args.get_chat_id:
+        get_telegram_chat_id()
+    elif args.check_once:
         # Single check mode for testing
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=args.headless, slow_mo=500)
@@ -320,8 +395,16 @@ if __name__ == "__main__":
             try:
                 login(page)
                 registered = check_and_register(page)
-                if not registered:
+                if registered:
+                    notify_telegram(
+                        f"🎉 Successfully registered for {AC_ACTIVITY_NAME}!\n"
+                        "Check your Active Communities account to confirm."
+                    )
+                else:
                     logger.info("No open spots found in this single check.")
+                    notify_telegram(
+                        f"⏳ Single check: No open spots for {AC_ACTIVITY_NAME} right now."
+                    )
             except Exception as e:
                 logger.error(f"Error in single check: {e}")
             finally:
@@ -329,3 +412,4 @@ if __name__ == "__main__":
                 browser.close()
     else:
         run_monitor(headless=args.headless)
+
