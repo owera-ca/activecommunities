@@ -1,0 +1,16 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment file (contains credentials - keep private!)
+# .env   <-- intentionally NOT ignored so it stays tracked locally
+# but remove this comment if you ever push to a remote repo
+
+# Logs
+*.log
+
+# Playwright output
+test-results/
+playwright-report/
